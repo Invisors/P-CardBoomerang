@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans
+     xmlns="http://www.springframework.org/schema/beans"
+     xmlns:beans="http://www.springframework.org/schema/beans"
+     xmlns:atom="http://www.w3.org/2005/Atom"
+     xmlns:cc="http://www.capeclear.com/assembly/10"
+     xmlns:cloud="urn:com.workday/esb/cloud/10.0"
+     xmlns:env="http://schemas.xmlsoap.org/soap/envelope/"
+     xmlns:pi="urn:com.workday/picof"
+     xmlns:wd="urn:com.workday/bsvc"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+ 
+	<cc:assembly id="WorkdayAssembly" version="2021.47">
+        <cc:workday-in id="StartHere" routes-to="InitProps">
+            <cc:integration-system name="INT142 P Card Transaction Boomerang">
+        <cloud:param name="From Datetime">
+          <cloud:type>
+            <cloud:simple-type>datetime</cloud:simple-type>
+          </cloud:type>
+          <cloud:default>
+            <cloud:class-report-field></cloud:class-report-field>
+          </cloud:default>
+        </cloud:param>
+        <cloud:param name="To Datetime">
+          <cloud:type>
+            <cloud:simple-type>datetime</cloud:simple-type>
+          </cloud:type>
+        </cloud:param>
+        <cloud:attribute-map-service name="INT142_AMS">
+          <cloud:attribute name="Web Service Versions">
+            <cloud:type>
+              <cloud:simple-type>text</cloud:simple-type>
+            </cloud:type>
+          </cloud:attribute>
+          <cloud:attribute name="Validate Only">
+            <cloud:type>
+              <cloud:simple-type>boolean</cloud:simple-type>
+            </cloud:type>
+          </cloud:attribute>
+        </cloud:attribute-map-service>
+        <cloud:report-service name="INT142_Report_Service">
+          <cloud:report-alias description="Returns all P Card transaction lines report" name="P Card Transaction Lines Report">
+            <cloud:report-reference description="CRI INT142 P Card Transaction Boomerang" type="WID">acc08b687b581016f8571fb88fe50000</cloud:report-reference>
+          </cloud:report-alias>
+        </cloud:report-service>
+      </cc:integration-system>
+        </cc:workday-in>
+        <cc:async-mediation id="InitProps" routes-to="CallGetData">
+            <cc:steps>
+                <cc:eval id="Eval">
+                    <cc:expression>props['ValidateOnly'] = intsys.getAttribute('Validate Only')</cc:expression>
+                    <cc:expression>props['WSVersion'] = intsys.getAttribute('Web Service Version')</cc:expression>
+                    <cc:expression>props['from'] = lp.getSimpleData('From Datetime')</cc:expression>
+                    <cc:expression>props['to'] = lp.getSimpleData('To Datetime')</cc:expression>
+                    <cc:expression>props['baseParams'] = new java.util.ArrayList</cc:expression>
+                    <cc:expression>props['baseParams'].add('from=' + props['from']);&#xD;
+props['baseParams'].add('to=' + props['to'])</cc:expression>
+                    <cc:expression>props['baseExtrapath'] = '?' + String.join('&amp;',props['baseParams'])</cc:expression>
+                </cc:eval>
+            </cc:steps>
+        </cc:async-mediation>
+        <cc:local-out id="CallGetData" store-message="none" routes-response-to="CallProcessData" endpoint="vm://INT142_P_Card_Transaction_Boomerang/GetData"/>
+        <cc:local-in id="GetData" routes-to="AsyncMediation"/>
+        <cc:local-out id="CallProcessData" store-message="none" execute-when="props['p.recordCount'] > 0" routes-response-to="CallCompleteIntegration" endpoint="vm://INT142_P_Card_Transaction_Boomerang/ProcessData"/>
+        <cc:local-out id="CallCompleteIntegration" store-message="none" endpoint="vm://INT142_P_Card_Transaction_Boomerang/CompleteIntegration"/>
+        <cc:local-in id="ProcessData" routes-to="AsyncMediation1"/>
+        <cc:local-in id="CompleteIntegration" routes-to="AsyncMediation6"/>
+        <cc:workday-out-soap id="WorkdayOutSoap" routes-response-to="Response" application="Revenue_Management" version="@{props['WSVersion']}"/>
+        <cc:async-mediation id="Response">
+            <cc:steps>
+                <cc:eval id="Eval">
+                    <cc:expression>props['r.Transaction.ID']= parts[0].xpath('env:Envelope/env:Body/wd:Put_Ad_Hoc_Project_Transaction_Response/wd:Ad_Hoc_Project_Transaction_Reference/wd:ID[@wd:type=&quot;WID&quot;]')</cc:expression>
+                </cc:eval>
+                <cc:cloud-log id="CloudLog" level="info" message="Success" message-details="Ad-Hoc Transaction line was successfully created. &#xD;&#xA;Business Document: @{props['p.busDocID']}&#xD;&#xA;Amount: @{props['p.extendedAmount']}&#xD;&#xA;Charge Date: @{props['p.chargeDate']}" reference-id="props['r.Transaction.ID']"/>
+            </cc:steps>
+        </cc:async-mediation>
+        <cc:async-mediation id="AsyncMediation" routes-to="WorkdayOutRest" handle-downstream-errors="true">
+            <cc:steps/>
+            <cc:send-error id="SendError" routes-to="PIMCustomReport"/>
+        </cc:async-mediation>
+        <cc:workday-out-rest id="WorkdayOutRest" routes-response-to="AsyncMediation0" extra-path="@{intsys.reportService.getExtrapath('P Card Transaction Lines Report')}@{props['baseExtrapath']}"/>
+        <cc:async-mediation id="AsyncMediation0">
+            <cc:steps>
+                <cc:eval id="Eval">
+                    <cc:expression>props['p.recordCount'] = parts[0].xpath('count(wd:Report_Data/wd:Report_Entry)')</cc:expression>
+                </cc:eval>
+                <cc:copy id="Copy" output="variable" output-mimetype="text/xml" output-variable="v.PCardReport"/>
+                <cc:validate-exp id="ValidateExp">
+                    <cc:expression failure-message="There were no records to process.">props['p.recordCount'] > 0</cc:expression>
+                </cc:validate-exp>
+            </cc:steps>
+            <cc:send-error id="SendError" routes-to="AsyncMediation7"/>
+        </cc:async-mediation>
+        <cc:async-mediation id="AsyncMediation1" routes-to="Splitter" handle-downstream-errors="true">
+            <cc:steps>
+                <cc:copy id="Copy" output-mimetype="text/xml" input="variable" input-variable="v.PCardReport"/>
+                <cc:xslt-plus id="XsltPlus" url="INT142_XSLT.xsl"/>
+            </cc:steps>
+            <cc:send-error id="SendError" routes-to="AsyncMediation3"/>
+        </cc:async-mediation>
+        <cc:async-mediation id="AsyncMediation2" routes-to="AsyncMediation5" handle-downstream-errors="true">
+            <cc:steps>
+                <cc:eval id="Eval">
+                    <cc:expression>props['p.WID'] = parts[0].xpath('substring-after(env:Envelope/env:Body/wd:Put_Ad_Hoc_Project_Transaction_Request/wd:Ad_Hoc_Project_Transaction_Data/wd:Ad_Hoc_Project_Transaction_ID,&quot;-&quot;)')</cc:expression>
+                    <cc:expression>props['p.busDocID'] = parts[0].xpath('env:Envelope/env:Body/wd:Put_Ad_Hoc_Project_Transaction_Request/wd:BusDocID')</cc:expression>
+                    <cc:expression>props['p.extendedAmount'] = parts[0].xpath('env:Envelope/env:Body/wd:Put_Ad_Hoc_Project_Transaction_Request/wd:Ad_Hoc_Project_Transaction_Data/wd:Ad_Hoc_Project_Expense_Transaction_Data/wd:Ad_Hoc_Project_Expense_Billing_Reference/wd:Extended_Billing_Amount')</cc:expression>
+                    <cc:expression>props['p.chargeDate'] = parts[0].xpath('env:Envelope/env:Body/wd:Put_Ad_Hoc_Project_Transaction_Request/wd:Ad_Hoc_Project_Transaction_Data/wd:Ad_Hoc_Project_Expense_Transaction_Data/wd:Transaction_Date')</cc:expression>
+                </cc:eval>
+                <cc:write id="Write">
+                    <cc:message>
+                        <cc:text>@{parts[0].text.replace('&lt;wd:BusDocID>' + props['p.busDocID'] + '&lt;/wd:BusDocID>','')}</cc:text>
+                    </cc:message>
+                </cc:write>
+            </cc:steps>
+            <cc:send-error id="SendError" routes-to="AsyncMediation4"/>
+        </cc:async-mediation>
+        <cc:async-mediation id="AsyncMediation3" routes-to="PutIntegrationMessage0">
+            <cc:steps>
+                <cc:cloud-log id="CloudLog" level="info" message="No records were sent to the integration to process." message-details="@{context.errorMessage}"/>
+            </cc:steps>
+        </cc:async-mediation>
+        <cc:async-mediation id="AsyncMediation4" routes-to="PutIntegrationMessage">
+            <cc:steps>
+                <cc:cloud-log id="CloudLog" level="error" message="Could not process @{props['p.WID']}&#xD;&#xA;Business Document: @{props['p.busDocID']}&#xD;&#xA;Amount: @{props['p.extendedAmount']}&#xD;&#xA;Charge Date: @{props['p.chargeDate']}" message-details="@{context.errorMessage}" reference-id="props['p.WID']"/>
+            </cc:steps>
+        </cc:async-mediation>
+        <cc:async-mediation id="AsyncMediation5" routes-to="WorkdayOutSoap" execute-steps-when="props['ValidateOnly']" handle-downstream-errors="true">
+            <cc:steps>
+                <cc:set-headers id="SetHeaders"><cc:remove-headers/><cc:add-headers>
+    <cc:add-header name="X-Validate-Only" value="1"/>
+</cc:add-headers></cc:set-headers>
+            </cc:steps>
+        </cc:async-mediation>
+        <cc:async-mediation id="AsyncMediation6">
+            <cc:steps>
+                <cc:store id="Store" input="variable" input-variable="cloud-log-content" expiresIn="P180D" title="INT142_Audit_Log.html"/>
+            </cc:steps>
+        </cc:async-mediation>
+        <cc:splitter id="Splitter" no-split-message-error="false">
+            <cc:sub-route name="SubRoute" routes-to="AsyncMediation2"/>
+            <cc:xml-stream-splitter xpath="root/env:Envelope"/>
+        </cc:splitter>
+        <cc:local-out id="PIMCustomReport" endpoint="vm://wcc/PutIntegrationMessage"><cc:set name="is.message.severity" value="'CRITICAL'"/><cc:set name="is.message.summary" value="'Failed to retrieve data from report CRI INT150 Travelers With No Assignments.' + context.errorMessage"/></cc:local-out>
+        <cc:send-error id="global-error-handler" rethrow-error="false" routes-to="Note-Error"/>
+        <cc:local-out id="Note-Error" endpoint="vm://wcc/PutIntegrationMessage">
+            <cc:set name="is.message.severity" value="'CRITICAL'"/>
+            <cc:set name="is.message.summary" value="context.errorMessage"/>
+        </cc:local-out>
+        <cc:local-out id="PutIntegrationMessage" endpoint="vm://wcc/PutIntegrationMessage"><cc:set name="is.message.severity" value="'ERROR'"/><cc:set name="is.message.summary" value="'Could not process ' + props['p.WID'] + '. ' + context.errorMessage"/></cc:local-out>
+        <cc:local-out id="PutIntegrationMessage0" endpoint="vm://wcc/PutIntegrationMessage">
+            <cc:set name="is.message.severity" value="'ERROR'"/>
+            <cc:set name="is.message.summary" value="'No records were sent to the integration to process.'"/>
+        </cc:local-out>
+        <cc:async-mediation id="AsyncMediation7">
+            <cc:steps>
+                <cc:cloud-log id="CloudLog" level="info" message="There was no data to process on @{props['to']}."/>
+            </cc:steps>
+        </cc:async-mediation>
+	</cc:assembly>
+
+</beans>
